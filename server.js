@@ -9,10 +9,9 @@ const activeUsers = new Map();
 const LOG_FILE = path.join(__dirname, 'server_history.log');
 const PLAYERS_HISTORY_FILE = path.join(__dirname, 'player_history.json');
 
-// --- 1. JÁTÉKOS HISTORY KEZELÉSE (Memória + Fájl) ---
+// --- 1. JÁTÉKOS HISTORY KEZELÉSE ---
 let knownPlayers = {};
 
-// Betöltjük a korábban elmentett játékosokat indításkor
 if (fs.existsSync(PLAYERS_HISTORY_FILE)) {
     try {
         const rawData = fs.readFileSync(PLAYERS_HISTORY_FILE, 'utf8');
@@ -23,7 +22,6 @@ if (fs.existsSync(PLAYERS_HISTORY_FILE)) {
     }
 }
 
-// Új játékos elmentése a fájlba (csak ha még nem létezik)
 function saveUniquePlayer(uuid, username) {
     if (!knownPlayers[uuid]) {
         knownPlayers[uuid] = {
@@ -31,7 +29,6 @@ function saveUniquePlayer(uuid, username) {
             firstSeen: new Date().toISOString()
         };
 
-        // Elmentjük a lemezre JSON formátumban
         fs.writeFile(PLAYERS_HISTORY_FILE, JSON.stringify(knownPlayers, null, 2), (err) => {
             if (err) {
                 console.error('Hiba a player_history.json mentésekor:', err);
@@ -52,9 +49,8 @@ function logServerConnection(uuid, username, serverIp) {
     });
 }
 
-// --- API ENDPOINT-OK ---
+// --- API ENDPOINT-OK (Szervernek és Modnak) ---
 
-// Heartbeat fogadása
 app.post('/api/heartbeat', (req, res) => {
     const { uuid, username, serverIp } = req.body;
     if (!uuid) return res.status(400).json({ error: 'Missing UUID' });
@@ -63,10 +59,8 @@ app.post('/api/heartbeat', (req, res) => {
     const currentIp = serverIp || 'Unknown';
     const existingUser = activeUsers.get(uuid);
 
-    // 1. Megpróbáljuk elmenteni az egyedi játékos listába (csak egyszer fogja elmenteni!)
     saveUniquePlayer(uuid, currentName);
 
-    // 2. Eseménynapló (IP váltás vagy új belépés esetén)
     if (!existingUser || existingUser.serverIp !== currentIp) {
         logServerConnection(uuid, currentName, currentIp);
     }
@@ -80,7 +74,14 @@ app.post('/api/heartbeat', (req, res) => {
     return res.json({ success: true });
 });
 
-// A modoknak átadott aktív UUID lista (Tab listához)
+app.post('/api/logout', (req, res) => {
+    const { uuid } = req.body;
+    if (uuid) {
+        activeUsers.delete(uuid);
+    }
+    return res.json({ success: true });
+});
+
 app.get('/api/users', (req, res) => {
     const now = Date.now();
     const TIMEOUT = 3 * 60 * 1000;
@@ -94,70 +95,156 @@ app.get('/api/users', (req, res) => {
     return res.json({ users: Array.from(activeUsers.keys()) });
 });
 
-// Online játékosok statisztikája
-app.get('/api/stats', (req, res) => {
-    const stats = [];
+
+// --- SZÉP BÖNGÉSZŐS FELÜLETEK (HTML) ---
+
+// 1. SZÉP ONLINE FELÜLET: https://mvp-backend-bods.onrender.com/api/online
+app.get('/api/online', (req, res) => {
+    const now = Date.now();
+    const TIMEOUT = 3 * 60 * 1000;
+    const onlinePlayers = [];
+
     for (const [uuid, data] of activeUsers.entries()) {
-        stats.push({
-            username: data.username,
-            uuid: uuid,
-            serverIp: data.serverIp,
-            lastSeen: new Date(data.lastSeen).toISOString()
-        });
+        if (now - data.lastSeen <= TIMEOUT) {
+            onlinePlayers.push(data);
+        } else {
+            activeUsers.delete(uuid);
+        }
     }
-    return res.json({ activeCount: stats.length, players: stats });
+
+    let rowsHtml = onlinePlayers.map(p => `
+        <tr>
+            <td style="padding:12px; border-bottom:1px solid #333; font-weight:bold; color:#4caf50;">🟢 ${p.username}</td>
+            <td style="padding:12px; border-bottom:1px solid #333; color:#00bcd4;">${p.serverIp}</td>
+        </tr>
+    `).join('');
+
+    if (onlinePlayers.length === 0) {
+        rowsHtml = `<tr><td colspan="2" style="padding:20px; text-align:center; color:#888;">Jelenleg senki sincs online.</td></tr>`;
+    }
+
+    const html = `
+    <!DOCTYPE html>
+    <html lang="hu">
+    <head>
+        <meta charset="UTF-8">
+        <title>Online Játékosok</title>
+        <style>
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background:#121212; color:#fff; padding:30px; display:flex; justify-content:center; }
+            .card { background:#1e1e1e; padding:25px; border-radius:12px; box-shadow:0 4px 20px rgba(0,0,0,0.5); width:100%; max-width:600px; }
+            h1 { margin-top:0; color:#fff; display:flex; justify-content:space-between; align-items:center; }
+            .badge { background:#4caf50; color:#000; padding:5px 12px; border-radius:20px; font-size:16px; font-weight:bold; }
+            table { width:100%; border-collapse:collapse; margin-top:15px; }
+            th { text-align:left; padding:10px; background:#2a2a2a; color:#aaa; border-bottom:2px solid #444; }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>🟢 Online Játékosok <span class="badge">${onlinePlayers.length} online</span></h1>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Játékosnév</th>
+                        <th>Helyzet / Szerver</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rowsHtml}
+                </tbody>
+            </table>
+        </div>
+    </body>
+    </html>
+    `;
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
 });
 
-// Szerver csatlakozási logok
+// 2. SZÉP ÖSSZES JÁTÉKOS FELÜLET: https://mvp-backend-bods.onrender.com/api/players
+app.get('/api/players', (req, res) => {
+    const totalCount = Object.keys(knownPlayers).length;
+
+    let rowsHtml = Object.entries(knownPlayers).map(([uuid, player]) => `
+        <tr>
+            <td style="padding:12px; border-bottom:1px solid #333; font-weight:bold; color:#2196f3;">👤 ${player.username}</td>
+            <td style="padding:12px; border-bottom:1px solid #333; font-size:12px; color:#aaa; font-family:monospace;">${uuid}</td>
+            <td style="padding:12px; border-bottom:1px solid #333; color:#ff9800;">${new Date(player.firstSeen).toLocaleString('hu-HU')}</td>
+        </tr>
+    `).join('');
+
+    if (totalCount === 0) {
+        rowsHtml = `<tr><td colspan="3" style="padding:20px; text-align:center; color:#888;">Még nem regisztrált egyetlen játékos sem.</td></tr>`;
+    }
+
+    const html = `
+    <!DOCTYPE html>
+    <html lang="hu">
+    <head>
+        <meta charset="UTF-8">
+        <title>Összes Játékos History</title>
+        <style>
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background:#121212; color:#fff; padding:30px; display:flex; justify-content:center; }
+            .card { background:#1e1e1e; padding:25px; border-radius:12px; box-shadow:0 4px 20px rgba(0,0,0,0.5); width:100%; max-width:800px; }
+            h1 { margin-top:0; color:#fff; display:flex; justify-content:space-between; align-items:center; }
+            .badge { background:#2196f3; color:#fff; padding:5px 12px; border-radius:20px; font-size:16px; font-weight:bold; }
+            table { width:100%; border-collapse:collapse; margin-top:15px; }
+            th { text-align:left; padding:10px; background:#2a2a2a; color:#aaa; border-bottom:2px solid #444; }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>👥 Összes Használó <span class="badge">${totalCount} játékos</span></h1>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Név</th>
+                        <th>UUID</th>
+                        <th>Első belépés</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rowsHtml}
+                </tbody>
+            </table>
+        </div>
+    </body>
+    </html>
+    `;
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+});
+
+// 3. CSATLAKOZÁSI LOGOK: https://mvp-backend-bods.onrender.com/api/logs
 app.get('/api/logs', (req, res) => {
     fs.readFile(LOG_FILE, 'utf8', (err, data) => {
         if (err) {
             if (err.code === 'ENOENT') return res.send('Nincs rögzített adat.');
             return res.status(500).send('Hiba a fájl olvasásakor.');
         }
-        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        res.send(data);
+        
+        const html = `
+        <!DOCTYPE html>
+        <html lang="hu">
+        <head>
+            <meta charset="UTF-8">
+            <title>Szerver Logok</title>
+            <style>
+                body { background:#0d1117; color:#c9d1d9; font-family:monospace; padding:20px; }
+                pre { background:#161b22; padding:20px; border-radius:8px; border:1px solid #30363d; overflow-x:auto; }
+            </style>
+        </head>
+        <body>
+            <h2>📜 Csatlakozási és IP Előzmények (Logok)</h2>
+            <pre>${data}</pre>
+        </body>
+        </html>
+        `;
+
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.send(html);
     });
-});
-
-// ÚJ ENDPOINT: Az összes eddig regisztrált egyedi játékos listája
-// Nyisd meg a böngészőben: https://mvp-backend-bods.onrender.com/api/players
-app.get('/api/players', (req, res) => {
-    return res.json({
-        totalUniquePlayers: Object.keys(knownPlayers).length,
-        players: knownPlayers
-    });
-});
-
-app.get('/api/online', (req, res) => {
-    const now = Date.now();
-    const TIMEOUT = 3 * 60 * 1000; // 3 perc inaktivitás után offline-nak számít
-
-    const onlinePlayers = [];
-
-    for (const [uuid, data] of activeUsers.entries()) {
-        if (now - data.lastSeen <= TIMEOUT) {
-            onlinePlayers.push({
-                username: data.username,
-                serverIp: data.serverIp
-            });
-        } else {
-            activeUsers.delete(uuid);
-        }
-    }
-
-    return res.json({
-        onlineCount: onlinePlayers.length,
-        players: onlinePlayers
-    });
-});
-
-app.post('/api/logout', (req, res) => {
-    const { uuid } = req.body;
-    if (uuid) {
-        activeUsers.delete(uuid);
-    }
-    return res.json({ success: true });
 });
 
 const PORT = process.env.PORT || 3000;
