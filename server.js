@@ -129,5 +129,28 @@ app.get('/api/players', (req, res) => {
     });
 });
 
+app.get('/api/online', (req, res) => {
+    const now = Date.now();
+    const TIMEOUT = 3 * 60 * 1000; // 3 perc inaktivitás után offline-nak számít
+
+    const onlinePlayers = [];
+
+    for (const [uuid, data] of activeUsers.entries()) {
+        if (now - data.lastSeen <= TIMEOUT) {
+            onlinePlayers.push({
+                username: data.username,
+                serverIp: data.serverIp
+            });
+        } else {
+            activeUsers.delete(uuid);
+        }
+    }
+
+    return res.json({
+        onlineCount: onlinePlayers.length,
+        players: onlinePlayers
+    });
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
