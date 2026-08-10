@@ -98,16 +98,24 @@ app.get('/api/users', (req, res) => {
 
 // --- SZÉP BÖNGÉSZŐS FELÜLETEK (HTML) ---
 
-// 1. SZÉP ONLINE FELÜLET: https://mvp-backend-bods.onrender.com/api/online
+// ONLINE FELÜLET (Rövidebb timeout + Kézi törlés opció)
 app.get('/api/online', (req, res) => {
+    // Ha megnyitod így: /api/online?reset=true -> kézzel üríti a beragadt listát
+    if (req.query.reset === 'true') {
+        activeUsers.clear();
+        return res.send('<h2 style="color:white;background:#121212;padding:20px;">Minden aktív játékos törölve az online listából! <a href="/api/online" style="color:#4caf50;">Vissza az online listára</a></h2>');
+    }
+
     const now = Date.now();
-    const TIMEOUT = 3 * 60 * 1000;
+    // Csökkentett timeout: 45 másodperc inaktivitás után automatikusan kikerül!
+    const TIMEOUT = 45 * 1000; 
     const onlinePlayers = [];
 
     for (const [uuid, data] of activeUsers.entries()) {
         if (now - data.lastSeen <= TIMEOUT) {
             onlinePlayers.push(data);
         } else {
+            // Ha lejárt a 45 másodperc, azonnal töröljük
             activeUsers.delete(uuid);
         }
     }
@@ -128,6 +136,7 @@ app.get('/api/online', (req, res) => {
     <html lang="hu">
     <head>
         <meta charset="UTF-8">
+        <meta http-equiv="refresh" content="15"> <!-- 15 másodpercenként automatikusan frissíti az oldalt -->
         <title>Online Játékosok</title>
         <style>
             body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background:#121212; color:#fff; padding:30px; display:flex; justify-content:center; }
@@ -136,6 +145,8 @@ app.get('/api/online', (req, res) => {
             .badge { background:#4caf50; color:#000; padding:5px 12px; border-radius:20px; font-size:16px; font-weight:bold; }
             table { width:100%; border-collapse:collapse; margin-top:15px; }
             th { text-align:left; padding:10px; background:#2a2a2a; color:#aaa; border-bottom:2px solid #444; }
+            .reset-btn { display:inline-block; margin-top:15px; color:#ff5252; font-size:12px; text-decoration:none; }
+            .reset-btn:hover { text-decoration:underline; }
         </style>
     </head>
     <body>
@@ -152,6 +163,7 @@ app.get('/api/online', (req, res) => {
                     ${rowsHtml}
                 </tbody>
             </table>
+            <a href="/api/online?reset=true" class="reset-btn">⚠️ Beragadt játékosok törlése (Lista ürítése)</a>
         </div>
     </body>
     </html>
