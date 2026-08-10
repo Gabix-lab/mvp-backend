@@ -84,7 +84,7 @@ app.post('/api/logout', (req, res) => {
 
 app.get('/api/users', (req, res) => {
     const now = Date.now();
-    const TIMEOUT = 3 * 60 * 1000;
+    const TIMEOUT = 45 * 1000;
 
     for (const [uuid, data] of activeUsers.entries()) {
         if (now - data.lastSeen > TIMEOUT) {
@@ -96,18 +96,16 @@ app.get('/api/users', (req, res) => {
 });
 
 
-// --- SZÉP BÖNGÉSZŐS FELÜLETEK (HTML) ---
+// --- SZÉP BÖNGÉSZŐS FELÜLETEK (HTML) ABC-SORRENDBEN ---
 
-// ONLINE FELÜLET (Rövidebb timeout + Kézi törlés opció)
+// 1. ONLINE FELÜLET (ABC-sorrendbe rendezve)
 app.get('/api/online', (req, res) => {
-    // Ha megnyitod így: /api/online?reset=true -> kézzel üríti a beragadt listát
     if (req.query.reset === 'true') {
         activeUsers.clear();
         return res.send('<h2 style="color:white;background:#121212;padding:20px;">Minden aktív játékos törölve az online listából! <a href="/api/online" style="color:#4caf50;">Vissza az online listára</a></h2>');
     }
 
     const now = Date.now();
-    // Csökkentett timeout: 45 másodperc inaktivitás után automatikusan kikerül!
     const TIMEOUT = 45 * 1000; 
     const onlinePlayers = [];
 
@@ -115,10 +113,12 @@ app.get('/api/online', (req, res) => {
         if (now - data.lastSeen <= TIMEOUT) {
             onlinePlayers.push(data);
         } else {
-            // Ha lejárt a 45 másodperc, azonnal töröljük
             activeUsers.delete(uuid);
         }
     }
+
+    // ABC-sorrendbe rendezés a játékosnév (username) alapján
+    onlinePlayers.sort((a, b) => a.username.localeCompare(b.username, 'hu', { sensitivity: 'base' }));
 
     let rowsHtml = onlinePlayers.map(p => `
         <tr>
@@ -136,7 +136,7 @@ app.get('/api/online', (req, res) => {
     <html lang="hu">
     <head>
         <meta charset="UTF-8">
-        <meta http-equiv="refresh" content="15"> <!-- 15 másodpercenként automatikusan frissíti az oldalt -->
+        <meta http-equiv="refresh" content="15">
         <title>Online Játékosok</title>
         <style>
             body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background:#121212; color:#fff; padding:30px; display:flex; justify-content:center; }
@@ -155,7 +155,7 @@ app.get('/api/online', (req, res) => {
             <table>
                 <thead>
                     <tr>
-                        <th>Játékosnév</th>
+                        <th>Játékosnév (A-Z)</th>
                         <th>Helyzet / Szerver</th>
                     </tr>
                 </thead>
@@ -173,11 +173,16 @@ app.get('/api/online', (req, res) => {
     res.send(html);
 });
 
-// 2. SZÉP ÖSSZES JÁTÉKOS FELÜLET: https://mvp-backend-bods.onrender.com/api/players
+// 2. ÖSSZES JÁTÉKOS FELÜLET (ABC-sorrendbe rendezve)
 app.get('/api/players', (req, res) => {
     const totalCount = Object.keys(knownPlayers).length;
 
-    let rowsHtml = Object.entries(knownPlayers).map(([uuid, player]) => `
+    // Átalakítás tömbbé és ABC-sorrendbe rendezés a játékosnév (username) alapján
+    const sortedPlayers = Object.entries(knownPlayers).sort((a, b) => {
+        return a[1].username.localeCompare(b[1].username, 'hu', { sensitivity: 'base' });
+    });
+
+    let rowsHtml = sortedPlayers.map(([uuid, player]) => `
         <tr>
             <td style="padding:12px; border-bottom:1px solid #333; font-weight:bold; color:#2196f3;">👤 ${player.username}</td>
             <td style="padding:12px; border-bottom:1px solid #333; font-size:12px; color:#aaa; font-family:monospace;">${uuid}</td>
@@ -210,7 +215,7 @@ app.get('/api/players', (req, res) => {
             <table>
                 <thead>
                     <tr>
-                        <th>Név</th>
+                        <th>Név (A-Z)</th>
                         <th>UUID</th>
                         <th>Első belépés</th>
                     </tr>
@@ -228,7 +233,7 @@ app.get('/api/players', (req, res) => {
     res.send(html);
 });
 
-// 3. CSATLAKOZÁSI LOGOK: https://mvp-backend-bods.onrender.com/api/logs
+// 3. CSATLAKOZÁSI LOGOK
 app.get('/api/logs', (req, res) => {
     fs.readFile(LOG_FILE, 'utf8', (err, data) => {
         if (err) {
