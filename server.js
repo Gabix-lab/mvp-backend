@@ -1,28 +1,51 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const app = express();
+
 app.use(express.json());
 
-// Memóriában tároljuk az aktív usereket: UUID -> Utolsó aktivitás (timestamp)
 const activeUsers = new Map();
+const LOG_FILE = path.join(__dirname, 'server_history.log');
 
-// 1. Regisztráció / Heartbeat (Ugyanaz az endpoint kezeli mindkettőt)
+function logServerConnection(uuid, serverIp) {
+    const timestamp = new Date().toISOString();
+    const logLine = `[${timestamp}] UUID: ${uuid} | IP: ${serverIp}\n`;
+
+    fs.appendFile(LOG_FILE, logLine, (err) => {
+        if (err) {
+            console.error('Hiba a fájlba íráskor:', err);
+        }
+    });
+}
+
 app.post('/api/heartbeat', (req, res) => {
-    const { uuid } = req.body;
-    if (!uuid) {
-        return res.status(400).json({ error: 'Missing UUID' });
+    const { uuid, serverIp } = req.body;
+    if (!uuid) return res.status(400).json({ error: 'Missing UUID' });
+
+    const currentIp = serverIp || 'Unknown';
+    const existingUser = activeUsers.get(uuid);
+
+    // Csak akkor írunk a fájlba, ha a játékos most lépett fel, vagy szervert váltott
+    if (!existingUser || existingUser.serverIp !== currentIp) {
+        logServerConnection(uuid, currentIp);
     }
-    
-    activeUsers.set(uuid, Date.now());
+
+    activeUsers.set(uuid, {
+        lastSeen: Date.now(),
+        serverIp: currentIp
+    });
+
     return res.json({ success: true });
 });
 
-// 2. Aktív userek lekérése (Törli a 3 percnél régebbi, inaktív usereket)
+// Tab listához szükséges felhasználók lekérése
 app.get('/api/users', (req, res) => {
     const now = Date.now();
-    const TIMEOUT = 3 * 60 * 1000; // 3 perc inaktivitás után törlés
+    const TIMEOUT = 3 * 60 * 1000;
 
-    for (const [uuid, lastSeen] of activeUsers.entries()) {
-        if (now - lastSeen > TIMEOUT) {
+    for (const [uuid, data] of activeUsers.entries()) {
+        if (now - data.lastSeen > TIMEOUT) {
             activeUsers.delete(uuid);
         }
     }
@@ -30,6 +53,30 @@ app.get('/api/users', (req, res) => {
     return res.json({ users: Array.from(activeUsers.keys()) });
 });
 
-// Szerver indítása
+app.get('/api/stats', (req, res) => {
+    const stats = [];
+    for (const [uuid, data] of activeUsers.entries()) {
+        stats.push({
+            uuid: uuid,
+            serverIp: data.serverIp,
+            lastSeen: new Date(data.lastSeen).toISOString()
+        });
+    }
+    return res.json({ activeCount: stats.length, players: stats });
+});
+
+app.get('/api/logs', (req, res) => {
+    fs.readFile(LOG_FILE, 'utf8', (err, data) => {
+        if (err) {
+            if (err.code === 'ENOENT') {
+                return res.send('Még nem készült el a log fájl (nincs rögzített adat).');
+            }
+            return res.status(500).send('Hiba a log fájl olvasásakor.');
+        }
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.send(data);
+    });
+});
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Actionbar Backend fut a ${PORT}-es porton.`));
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
