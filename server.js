@@ -152,5 +152,13 @@ app.get('/api/online', (req, res) => {
     });
 });
 
+app.post('/api/logout', (req, res) => {
+    const { uuid } = req.body;
+    if (uuid) {
+        activeUsers.delete(uuid);
+    }
+    return res.json({ success: true });
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
