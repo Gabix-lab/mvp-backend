@@ -1,6 +1,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const app = express();
 
 app.use(express.json());
@@ -12,50 +13,42 @@ const PLAYERS_HISTORY_FILE = path.join(__dirname, 'player_history.json');
 const PLAYTIME_FILE = path.join(__dirname, 'playtime_history.json');
 const BLACKLIST_FILE = path.join(__dirname, 'blacklist.json');
 
-// --- 1. TILTÓLISTA (BLACKLIST) KEZELÉSE ---
 let blacklist = [];
 if (fs.existsSync(BLACKLIST_FILE)) {
     try {
         blacklist = JSON.parse(fs.readFileSync(BLACKLIST_FILE, 'utf8'));
     } catch (err) {
-        console.error('Hiba a blacklist.json olvasásakor:', err);
         blacklist = [];
     }
 }
 
 function saveBlacklist() {
-    fs.writeFile(BLACKLIST_FILE, JSON.stringify(blacklist, null, 2), (err) => {
-        if (err) console.error('Hiba a blacklist mentésekor:', err);
-    });
+    fs.writeFile(BLACKLIST_FILE, JSON.stringify(blacklist, null, 2), () => {});
 }
 
-// --- 2. PLAYTIME ADATOK BETÖLTÉSE & MENTÉSE ---
 let playtimeData = {};
 if (fs.existsSync(PLAYTIME_FILE)) {
     try {
         playtimeData = JSON.parse(fs.readFileSync(PLAYTIME_FILE, 'utf8'));
     } catch (err) {
-        console.error('Hiba a playtime_history.json olvasásakor:', err);
         playtimeData = {};
     }
 }
 
-// Biztonságos, szinkron mentés az adatvesztés és fájlsérülés ellen
+let isSavingPlaytime = false;
 function savePlaytime() {
-    try {
-        fs.writeFileSync(PLAYTIME_FILE, JSON.stringify(playtimeData, null, 2), 'utf8');
-    } catch (err) {
-        console.error('Hiba a playtime mentésekor:', err);
-    }
+    if (isSavingPlaytime) return;
+    isSavingPlaytime = true;
+    fs.writeFile(PLAYTIME_FILE, JSON.stringify(playtimeData, null, 2), 'utf8', () => {
+        isSavingPlaytime = false;
+    });
 }
 
-// --- 3. JÁTÉKOS HISTORY KEZELÉSE ---
 let knownPlayers = {};
 if (fs.existsSync(PLAYERS_HISTORY_FILE)) {
     try {
         knownPlayers = JSON.parse(fs.readFileSync(PLAYERS_HISTORY_FILE, 'utf8'));
     } catch (err) {
-        console.error('Hiba a player_history.json olvasásakor:', err);
         knownPlayers = {};
     }
 }
@@ -70,25 +63,29 @@ function saveUniquePlayer(uuid, username) {
     }
 }
 
-// --- 4. LOG FILE KEZELÉSE ---
 function logServerConnection(uuid, username, serverIp) {
     const timestamp = new Date().toISOString();
     const logLine = `[${timestamp}] Name: ${username} | UUID: ${uuid} | IP: ${serverIp}\n`;
     fs.appendFile(LOG_FILE, logLine, () => {});
 }
 
-// ==========================================
-// API ENDPOINT-OK (Szervernek és Modnak)
-// ==========================================
+function getOfflineUuid(username) {
+    const md5 = crypto.createHash('md5').update('OfflinePlayer:' + username).digest();
+    md5[6] = (md5[6] & 0x0f) | 0x30;
+    md5[8] = (md5[8] & 0x3f) | 0x80;
+    const hex = md5.toString('hex');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 
 app.post('/api/heartbeat', (req, res) => {
     const { uuid, username, serverIp } = req.body;
     if (!uuid) return res.status(400).json({ allowed: false, error: 'Missing UUID' });
 
-    // TILTÁS ELLENŐRZÉSE
-    if (blacklist.includes(uuid)) {
-        // Ha le van tiltva, eltávolítjuk az aktív játékosok közül is
+    const offlineUuid = username ? getOfflineUuid(username) : uuid;
+
+    if (blacklist.includes(uuid) || blacklist.includes(offlineUuid)) {
         activeUsers.delete(uuid);
+        activeUsers.delete(offlineUuid);
         return res.json({ 
             allowed: false, 
             reason: 'A mod használati joga ehhez a fiókhoz le lett tiltva!' 
@@ -106,7 +103,6 @@ app.post('/api/heartbeat', (req, res) => {
         logServerConnection(uuid, currentName, currentIp);
     }
 
-    // DINAMIKUS PLAYTIME MÉRÉS
     if (currentIp !== 'In game main menu') {
         if (!playtimeData[currentIp]) {
             playtimeData[currentIp] = {};
@@ -130,11 +126,16 @@ app.post('/api/heartbeat', (req, res) => {
         }
     }
 
-    activeUsers.set(uuid, {
+    const userData = {
         username: currentName,
         serverIp: currentIp,
+        uuid: uuid,
+        offlineUuid: offlineUuid,
         lastSeen: now
-    });
+    };
+
+    activeUsers.set(uuid, userData);
+    activeUsers.set(offlineUuid, userData);
 
     return res.json({ allowed: true, success: true });
 });
@@ -142,7 +143,13 @@ app.post('/api/heartbeat', (req, res) => {
 app.post('/api/logout', (req, res) => {
     const { uuid } = req.body;
     if (uuid) {
-        activeUsers.delete(uuid);
+        const data = activeUsers.get(uuid);
+        if (data) {
+            activeUsers.delete(data.uuid);
+            activeUsers.delete(data.offlineUuid);
+        } else {
+            activeUsers.delete(uuid);
+        }
     }
     return res.json({ success: true });
 });
@@ -150,22 +157,23 @@ app.post('/api/logout', (req, res) => {
 app.get('/api/users', (req, res) => {
     const now = Date.now();
     const TIMEOUT = 45 * 1000;
+    const activeList = new Set();
 
-    for (const [uuid, data] of activeUsers.entries()) {
+    for (const [key, data] of activeUsers.entries()) {
         if (now - data.lastSeen > TIMEOUT) {
-            activeUsers.delete(uuid);
+            activeUsers.delete(key);
+        } else {
+            if (!blacklist.includes(data.uuid) && !blacklist.includes(data.offlineUuid)) {
+                activeList.add(data.uuid);
+                if (data.offlineUuid) activeList.add(data.offlineUuid);
+            }
         }
     }
 
-    return res.json({ users: Array.from(activeUsers.keys()) });
+    return res.json({ users: Array.from(activeList) });
 });
 
-// ==========================================
-// TILTÁSOK KEZELÉSE FELÜLET (/api/ban)
-// ==========================================
-
 app.get('/api/ban', (req, res) => {
-    // Akciók kezelése URL query paraméterekből (?action=ban&uuid=...)
     const { action, uuid } = req.query;
 
     if (action === 'ban' && uuid) {
@@ -183,21 +191,21 @@ app.get('/api/ban', (req, res) => {
         return res.redirect('/api/ban');
     }
 
-    // 1. Online játékosok kigyűjtése
     const now = Date.now();
     const TIMEOUT = 45 * 1000;
-    const onlinePlayers = [];
+    const onlinePlayersMap = new Map();
 
     for (const [pUuid, data] of activeUsers.entries()) {
         if (now - data.lastSeen <= TIMEOUT) {
-            if (!blacklist.includes(pUuid)) {
-                onlinePlayers.push({ uuid: pUuid, ...data });
+            if (!blacklist.includes(data.uuid) && !blacklist.includes(data.offlineUuid)) {
+                onlinePlayersMap.set(data.uuid, data);
             }
         } else {
             activeUsers.delete(pUuid);
         }
     }
 
+    const onlinePlayers = Array.from(onlinePlayersMap.values());
     onlinePlayers.sort((a, b) => a.username.localeCompare(b.username, 'hu', { sensitivity: 'base' }));
 
     let onlineRowsHtml = onlinePlayers.map(p => `
@@ -217,7 +225,6 @@ app.get('/api/ban', (req, res) => {
         onlineRowsHtml = `<tr><td colspan="4" style="padding:20px; text-align:center; color:#888;">Nincs online játékos jelenleg.</td></tr>`;
     }
 
-    // 2. Tiltott játékosok listája
     let bannedRowsHtml = blacklist.map(bUuid => {
         const name = knownPlayers[bUuid] ? knownPlayers[bUuid].username : 'Ismeretlen Név';
         return `
@@ -293,11 +300,6 @@ app.get('/api/ban', (req, res) => {
     res.send(html);
 });
 
-// ==========================================
-// A TÖBBI BÖNGÉSZŐS FELÜLET
-// ==========================================
-
-// 1. ONLINE JÁTÉKOSOK LISTÁJA
 app.get('/api/online', (req, res) => {
     if (req.query.reset === 'true') {
         activeUsers.clear();
@@ -306,18 +308,19 @@ app.get('/api/online', (req, res) => {
 
     const now = Date.now();
     const TIMEOUT = 45 * 1000; 
-    const onlinePlayers = [];
+    const onlinePlayersMap = new Map();
 
     for (const [uuid, data] of activeUsers.entries()) {
         if (now - data.lastSeen <= TIMEOUT) {
-            if (!blacklist.includes(uuid)) {
-                onlinePlayers.push(data);
+            if (!blacklist.includes(data.uuid) && !blacklist.includes(data.offlineUuid)) {
+                onlinePlayersMap.set(data.uuid, data);
             }
         } else {
             activeUsers.delete(uuid);
         }
     }
 
+    const onlinePlayers = Array.from(onlinePlayersMap.values());
     onlinePlayers.sort((a, b) => a.username.localeCompare(b.username, 'hu', { sensitivity: 'base' }));
 
     let rowsHtml = onlinePlayers.map(p => `
@@ -373,7 +376,6 @@ app.get('/api/online', (req, res) => {
     res.send(html);
 });
 
-// 2. DINAMIKUS PLAYTIME
 app.get('/api/playtime', (req, res) => {
     const formatTime = (totalSeconds) => {
         const hours = Math.floor(totalSeconds / 3600);
@@ -468,7 +470,6 @@ app.get('/api/playtime', (req, res) => {
     res.send(html);
 });
 
-// 3. ÖSSZES JÁTÉKOS HISTORY
 app.get('/api/players', (req, res) => {
     const totalCount = Object.keys(knownPlayers).length;
 
@@ -527,7 +528,6 @@ app.get('/api/players', (req, res) => {
     res.send(html);
 });
 
-// 4. LOGOK
 app.get('/api/logs', (req, res) => {
     fs.readFile(LOG_FILE, 'utf8', (err, data) => {
         if (err) {
