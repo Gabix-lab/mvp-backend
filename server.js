@@ -29,7 +29,7 @@ function saveBlacklist() {
     });
 }
 
-// --- 2. PLAYTIME ADATOK BETÖLTÉSE ---
+// --- 2. PLAYTIME ADATOK BETÖLTÉSE & MENTÉSE ---
 let playtimeData = {};
 if (fs.existsSync(PLAYTIME_FILE)) {
     try {
@@ -40,10 +40,13 @@ if (fs.existsSync(PLAYTIME_FILE)) {
     }
 }
 
+// Biztonságos, szinkron mentés az adatvesztés és fájlsérülés ellen
 function savePlaytime() {
-    fs.writeFile(PLAYTIME_FILE, JSON.stringify(playtimeData, null, 2), (err) => {
-        if (err) console.error('Hiba a playtime mentésekor:', err);
-    });
+    try {
+        fs.writeFileSync(PLAYTIME_FILE, JSON.stringify(playtimeData, null, 2), 'utf8');
+    } catch (err) {
+        console.error('Hiba a playtime mentésekor:', err);
+    }
 }
 
 // --- 3. JÁTÉKOS HISTORY KEZELÉSE ---
