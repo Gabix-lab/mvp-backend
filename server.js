@@ -39,7 +39,7 @@ let isSavingPlaytime = false;
 function savePlaytime() {
     if (isSavingPlaytime) return;
     isSavingPlaytime = true;
-    fs.writeFile(PLAYTIME_FILE, JSON.stringify(playtimeData, null, 2), 'utf8', () => {
+    fs.writeFile(PLAYTIME_FILE, JSON.stringify(playtimeData, null, 2), 'utf8', (err) => {
         isSavingPlaytime = false;
     });
 }
@@ -95,7 +95,8 @@ app.post('/api/heartbeat', (req, res) => {
     const currentName = username || 'Unknown';
     const currentIp = serverIp || 'In game main menu';
     const now = Date.now();
-    const existingUser = activeUsers.get(uuid);
+
+    const existingUser = activeUsers.get(uuid) || activeUsers.get(offlineUuid);
 
     saveUniquePlayer(uuid, currentName);
 
@@ -119,7 +120,7 @@ app.post('/api/heartbeat', (req, res) => {
 
         if (existingUser && existingUser.serverIp === currentIp) {
             const elapsedSeconds = Math.floor((now - existingUser.lastSeen) / 1000);
-            if (elapsedSeconds > 0 && elapsedSeconds < 35) {
+            if (elapsedSeconds > 0 && elapsedSeconds < 120) {
                 playtimeData[currentIp][uuid].totalSeconds += elapsedSeconds;
                 savePlaytime();
             }
@@ -135,7 +136,9 @@ app.post('/api/heartbeat', (req, res) => {
     };
 
     activeUsers.set(uuid, userData);
-    activeUsers.set(offlineUuid, userData);
+    if (offlineUuid !== uuid) {
+        activeUsers.set(offlineUuid, userData);
+    }
 
     return res.json({ allowed: true, success: true });
 });
@@ -381,7 +384,7 @@ app.get('/api/playtime', (req, res) => {
         const hours = Math.floor(totalSeconds / 3600);
         const minutes = Math.floor((totalSeconds % 3600) / 60);
         const seconds = totalSeconds % 60;
-        
+
         let result = [];
         if (hours > 0) result.push(`${hours} óra`);
         if (minutes > 0 || hours > 0) result.push(`${minutes} perc`);
@@ -534,7 +537,7 @@ app.get('/api/logs', (req, res) => {
             if (err.code === 'ENOENT') return res.send('Nincs rögzített adat.');
             return res.status(500).send('Hiba a fájl olvasásakor.');
         }
-        
+
         const html = `
         <!DOCTYPE html>
         <html lang="hu">
