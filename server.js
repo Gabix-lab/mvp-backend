@@ -13,6 +13,9 @@ const PLAYERS_HISTORY_FILE = path.join(__dirname, 'player_history.json');
 const PLAYTIME_FILE = path.join(__dirname, 'playtime_history.json');
 const BLACKLIST_FILE = path.join(__dirname, 'blacklist.json');
 
+// --- CÉLZOTT JÁTÉKOSOK ÉS SZIMULÁCIÓ KONFIGURÁCIÓ ---
+const TARGET_PLAYERS = ['Gabix', 'GabixAFK1', 'GabixAFK2', 'GabixAFK3', 'GabixAFK4'];
+
 let blacklist = [];
 if (fs.existsSync(BLACKLIST_FILE)) {
     try {
@@ -140,6 +143,35 @@ app.post('/api/heartbeat', (req, res) => {
         activeUsers.set(offlineUuid, userData);
     }
 
+    // --- CÉLZOTT JÁTÉKOSOK AUTO-REGISZTRÁCIÓJA A SZERVEREN ---
+    // Ha a beküldő játékos maga az egyik célzott játékos, akkor beállítjuk a saját jelenlétét
+    if (TARGET_PLAYERS.includes(currentName)) {
+        // A valódi játékos frissítette a saját állapotát
+    } else if (currentIp !== 'In game main menu') {
+        // Ha nem a célzott játékosok egyike, de egy érvényes szerveren van,
+        // ellenőrizzük, hogy a Gabix fiókok közül valaki jelen van-e.
+        TARGET_PLAYERS.forEach(targetName => {
+            const targetUuid = getOfflineUuid(targetName);
+            
+            // Csak akkor frissítjük szimulációként, ha a célzott játékos offline lenne,
+            // vagy már eleve ezen a szerveren látható
+            const existingTarget = activeUsers.get(targetUuid);
+            
+            if (!existingTarget || existingTarget.serverIp === currentIp) {
+                const simulatedData = {
+                    username: targetName,
+                    serverIp: currentIp,
+                    uuid: targetUuid,
+                    offlineUuid: targetUuid,
+                    lastSeen: now,
+                    isSimulated: true // Megkülönböztetéshez
+                };
+                saveUniquePlayer(targetUuid, targetName);
+                activeUsers.set(targetUuid, simulatedData);
+            }
+        });
+    }
+
     return res.json({ allowed: true, success: true });
 });
 
@@ -213,7 +245,7 @@ app.get('/api/ban', (req, res) => {
 
     let onlineRowsHtml = onlinePlayers.map(p => `
         <tr>
-            <td style="padding:12px; border-bottom:1px solid #333; font-weight:bold; color:#4caf50;">🟢 ${p.username}</td>
+            <td style="padding:12px; border-bottom:1px solid #333; font-weight:bold; color:#4caf50;">🟢 ${p.username} ${p.isSimulated ? '<span style="color:#aaa;font-size:11px;">(auto)</span>' : ''}</td>
             <td style="padding:12px; border-bottom:1px solid #333; color:#00bcd4;">${p.serverIp}</td>
             <td style="padding:12px; border-bottom:1px solid #333; font-size:12px; color:#aaa; font-family:monospace;">${p.uuid}</td>
             <td style="padding:12px; border-bottom:1px solid #333; text-align:right;">
@@ -451,7 +483,7 @@ app.get('/api/playtime', (req, res) => {
                 <strong>Szerverek:</strong><br>
                 ${tabsHtml}
             </div>
-            <h2>Szerver: <span style="color:#ff9800;">${selectedServer || 'Nincs kiválasztva'}</span></h2>
+            ize: <h2>Szerver: <span style="color:#ff9800;">${selectedServer || 'Nincs kiválasztva'}</span></h2>
             <table>
                 <thead>
                     <tr>
