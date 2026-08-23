@@ -1,13 +1,20 @@
 const express = require('express');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+
 const app = express();
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Memóriabeli adattároló az éppen online/aktív modhasználóknak
 const activeUsers = new Map();
 
+// Célzott fiókok megadása
 const TARGET_PLAYERS = ['Gabix', 'GabixAFK1', 'GabixAFK2', 'GabixAFK3', 'GabixAFK4'];
+
+// --- SEGÉDFÜGGVÉNYEK ---
 
 function escapeHtml(str) {
     if (!str) return '';
@@ -26,6 +33,10 @@ function getOfflineUuid(username) {
     const hex = md5.toString('hex');
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
+
+// ==========================================
+// KLIENS API VÉGPONTOK (Modhoz)
+// ==========================================
 
 app.post('/api/heartbeat', (req, res) => {
     const { uuid, username, serverIp } = req.body;
@@ -68,6 +79,23 @@ app.post('/api/heartbeat', (req, res) => {
     return res.json({ allowed: true, success: true });
 });
 
+// Mod letöltési végpont a memóriába töltéshez
+app.get('/api/download-mod', (req, res) => {
+    const { uuid } = req.query;
+
+    if (!uuid || !activeUsers.has(uuid)) {
+        return res.status(403).json({ allowed: false, error: 'Nincs engedélyezve!' });
+    }
+
+    const payloadPath = path.join(__dirname, 'payload.jar');
+
+    if (!fs.existsSync(payloadPath)) {
+        return res.status(404).json({ error: 'Payload mod fájl nem található a szerveren!' });
+    }
+
+    res.sendFile(payloadPath);
+});
+
 app.post('/api/logout', (req, res) => {
     const { uuid } = req.body;
     if (uuid) {
@@ -98,6 +126,10 @@ app.get('/api/users', (req, res) => {
 
     return res.json({ users: Array.from(activeList) });
 });
+
+// ==========================================
+// WEBES DASHBOARD VÉGPONT
+// ==========================================
 
 app.get('/api/online', (req, res) => {
     if (req.query.reset === 'true') {
@@ -173,5 +205,6 @@ app.get('/api/online', (req, res) => {
     res.send(html);
 });
 
+// Port dinamikus kezelése a Render környezethez
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
