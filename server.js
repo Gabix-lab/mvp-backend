@@ -89,7 +89,7 @@ app.get('/api/download-mod', (req, res) => {
         return res.status(404).json({ error: 'Payload mod fájl nem található a szerveren!' });
     }
 
-    res.sendFile(payloadPath);
+    res.download(payloadPath, 'MVP-1.5.9-alfa.jar');
 });
 
 app.post('/api/logout', (req, res) => {
