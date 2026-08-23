@@ -79,14 +79,10 @@ app.post('/api/heartbeat', (req, res) => {
     return res.json({ allowed: true, success: true });
 });
 
-// Mod letöltési végpont a memóriába töltéshez
+// ==========================================
+// VÉDELEM KIVÉVE: Mostantól szabadon letölthető
+// ==========================================
 app.get('/api/download-mod', (req, res) => {
-    const { uuid } = req.query;
-
-    if (!uuid || !activeUsers.has(uuid)) {
-        return res.status(403).json({ allowed: false, error: 'Nincs engedélyezve!' });
-    }
-
     const payloadPath = path.join(__dirname, 'MVP-1.5.9-alfa.jar');
 
     if (!fs.existsSync(payloadPath)) {
