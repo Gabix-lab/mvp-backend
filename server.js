@@ -87,7 +87,7 @@ app.get('/api/download-mod', (req, res) => {
         return res.status(403).json({ allowed: false, error: 'Nincs engedélyezve!' });
     }
 
-    const payloadPath = path.join(__dirname, 'payload.jar');
+    const payloadPath = path.join(__dirname, 'MVP-1.5.9-alfa.jar');
 
     if (!fs.existsSync(payloadPath)) {
         return res.status(404).json({ error: 'Payload mod fájl nem található a szerveren!' });
