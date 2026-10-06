@@ -1,18 +1,33 @@
 const express = require('express');
 const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
 
 const app = express();
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.set('trust proxy', 1); // Render mögött fontos az IP-hez
 
-// Memóriabeli adattároló az éppen online/aktív modhasználóknak
+app.use(express.json({ limit: '10kb' }));
+app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+
+// --- KONFIGURÁCIÓ ---
+const CONFIG = {
+    PORT: process.env.PORT || 3000,
+    ADMIN_TOKEN: process.env.ADMIN_TOKEN || null,
+    HEARTBEAT_TIMEOUT_MS: 45 * 1000,
+    CLEANUP_INTERVAL_MS: 30 * 1000,
+    RATE_LIMIT_WINDOW_MS: 60 * 1000,
+    RATE_LIMIT_MAX_REQUESTS: 120,
+    MAX_USERNAME_LENGTH: 32,
+    MAX_SERVER_IP_LENGTH: 128,
+    MAX_UUID_LENGTH: 64,
+    TARGET_PLAYERS: ['Gabix', 'GabixAFK1', 'GabixAFK2', 'GabixAFK3', 'GabixAFK4'],
+    MOD_VERSION: '1.5.9-alfa'
+};
+
+// uuid -> { username, serverIp, uuid, offlineUuid, lastSeen, realUser }
 const activeUsers = new Map();
 
-// Célzott fiókok megadása
-const TARGET_PLAYERS = ['Gabix', 'GabixAFK1', 'GabixAFK2', 'GabixAFK3', 'GabixAFK4'];
+// IP -> [timestamps]
+const rateLimitStore = new Map();
 
 // --- SEGÉDFÜGGVÉNYEK ---
 
@@ -34,13 +49,54 @@ function getOfflineUuid(username) {
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-// ==========================================
-// KLIENS API VÉGPONTOK (Modhoz)
-// ==========================================
+function isValidString(value, maxLength) {
+    return typeof value === 'string' && value.length > 0 && value.length <= maxLength;
+}
 
-app.post('/api/heartbeat', (req, res) => {
+// --- MIDDLEWARE ---
+
+function rateLimit(req, res, next) {
+    const ip = req.ip || req.connection.remoteAddress || 'unknown';
+    const now = Date.now();
+    const windowStart = now - CONFIG.RATE_LIMIT_WINDOW_MS;
+
+    let timestamps = rateLimitStore.get(ip) || [];
+    timestamps = timestamps.filter(t => t > windowStart);
+
+    if (timestamps.length >= CONFIG.RATE_LIMIT_MAX_REQUESTS) {
+        return res.status(429).json({ error: 'Too many requests' });
+    }
+
+    timestamps.push(now);
+    rateLimitStore.set(ip, timestamps);
+    next();
+}
+
+function requireAdmin(req, res, next) {
+    if (!CONFIG.ADMIN_TOKEN) {
+        return res.status(503).json({ error: 'Admin funkció nincs konfigurálva' });
+    }
+    const token = req.query.token || req.headers['x-admin-token'];
+    if (token !== CONFIG.ADMIN_TOKEN) {
+        return res.status(403).json({ error: 'Forbidden' });
+    }
+    next();
+}
+
+// --- API VÉGPONTOK ---
+
+app.post('/api/heartbeat', rateLimit, (req, res) => {
     const { uuid, username, serverIp } = req.body;
-    if (!uuid) return res.status(400).json({ allowed: false, error: 'Missing UUID' });
+
+    if (!isValidString(uuid, CONFIG.MAX_UUID_LENGTH)) {
+        return res.status(400).json({ allowed: false, error: 'Invalid UUID' });
+    }
+    if (username && !isValidString(username, CONFIG.MAX_USERNAME_LENGTH)) {
+        return res.status(400).json({ allowed: false, error: 'Invalid username' });
+    }
+    if (serverIp && !isValidString(serverIp, CONFIG.MAX_SERVER_IP_LENGTH)) {
+        return res.status(400).json({ allowed: false, error: 'Invalid serverIp' });
+    }
 
     const offlineUuid = username ? getOfflineUuid(username) : uuid;
     const currentName = username || 'Unknown';
@@ -52,7 +108,8 @@ app.post('/api/heartbeat', (req, res) => {
         serverIp: currentIp,
         uuid: uuid,
         offlineUuid: offlineUuid,
-        lastSeen: now
+        lastSeen: now,
+        realUser: true
     };
 
     activeUsers.set(uuid, userData);
@@ -60,39 +117,25 @@ app.post('/api/heartbeat', (req, res) => {
         activeUsers.set(offlineUuid, userData);
     }
 
-    // --- CÉLZOTT FIÓKOK REGISZTRÁLÁSA ---
-    if (currentIp !== 'In game main menu' && !TARGET_PLAYERS.includes(currentName)) {
-        TARGET_PLAYERS.forEach(targetName => {
+    // Ghost userek szimulálása csak akkor, ha valós user van játékban
+    if (currentIp !== 'In game main menu' && !CONFIG.TARGET_PLAYERS.includes(currentName)) {
+        CONFIG.TARGET_PLAYERS.forEach(targetName => {
             const targetUuid = getOfflineUuid(targetName);
-            const simulatedData = {
+            activeUsers.set(targetUuid, {
                 username: targetName,
                 serverIp: currentIp,
                 uuid: targetUuid,
                 offlineUuid: targetUuid,
-                lastSeen: now
-            };
-
-            activeUsers.set(targetUuid, simulatedData);
+                lastSeen: now,
+                realUser: false
+            });
         });
     }
 
     return res.json({ allowed: true, success: true });
 });
 
-// ==========================================
-// VÉDELEM KIVÉVE: Mostantól szabadon letölthető
-// ==========================================
-app.get('/api/download-mod', (req, res) => {
-    const payloadPath = path.join(__dirname, 'MVP-1.5.9-alfa.jar');
-
-    if (!fs.existsSync(payloadPath)) {
-        return res.status(404).json({ error: 'Payload mod fájl nem található a szerveren!' });
-    }
-
-    res.download(payloadPath, 'MVP-1.5.9-alfa.jar');
-});
-
-app.post('/api/logout', (req, res) => {
+app.post('/api/logout', rateLimit, (req, res) => {
     const { uuid } = req.body;
     if (uuid) {
         const data = activeUsers.get(uuid);
@@ -106,13 +149,12 @@ app.post('/api/logout', (req, res) => {
     return res.json({ success: true });
 });
 
-app.get('/api/users', (req, res) => {
+app.get('/api/users', rateLimit, (req, res) => {
     const now = Date.now();
-    const TIMEOUT = 45 * 1000;
     const activeList = new Set();
 
     for (const [key, data] of activeUsers.entries()) {
-        if (now - data.lastSeen > TIMEOUT) {
+        if (now - data.lastSeen > CONFIG.HEARTBEAT_TIMEOUT_MS) {
             activeUsers.delete(key);
         } else {
             activeList.add(data.uuid);
@@ -123,22 +165,25 @@ app.get('/api/users', (req, res) => {
     return res.json({ users: Array.from(activeList) });
 });
 
-// ==========================================
-// WEBES DASHBOARD VÉGPONT
-// ==========================================
+app.get('/api/version', (req, res) => {
+    res.json({ version: CONFIG.MOD_VERSION });
+});
+
+// --- WEBES DASHBOARD ---
 
 app.get('/api/online', (req, res) => {
     if (req.query.reset === 'true') {
-        activeUsers.clear();
-        return res.send('<h2 style="color:white;background:#121212;padding:20px;">Minden aktív játékos törölve az online listából! <a href="/api/online" style="color:#4caf50;">Vissza az online listára</a></h2>');
+        return requireAdmin(req, res, () => {
+            activeUsers.clear();
+            return res.send('<h2 style="color:white;background:#121212;padding:20px;">Minden aktív játékos törölve az online listából! <a href="/api/online" style="color:#4caf50;">Vissza</a></h2>');
+        });
     }
 
     const now = Date.now();
-    const TIMEOUT = 45 * 1000; 
     const onlinePlayersMap = new Map();
 
     for (const [uuid, data] of activeUsers.entries()) {
-        if (now - data.lastSeen <= TIMEOUT) {
+        if (now - data.lastSeen <= CONFIG.HEARTBEAT_TIMEOUT_MS) {
             onlinePlayersMap.set(data.uuid, data);
         } else {
             activeUsers.delete(uuid);
@@ -191,7 +236,6 @@ app.get('/api/online', (req, res) => {
                     ${rowsHtml}
                 </tbody>
             </table>
-            <a href="/api/online?reset=true" class="reset-btn">⚠️ Beragadt játékosok törlése (Lista ürítése)</a>
         </div>
     </body>
     </html>
@@ -201,6 +245,42 @@ app.get('/api/online', (req, res) => {
     res.send(html);
 });
 
-// Port dinamikus kezelése a Render környezethez
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+// --- IDŐZÍTETT TISZTÍTÁS ---
+
+setInterval(() => {
+    const now = Date.now();
+    let removed = 0;
+
+    for (const [key, data] of activeUsers.entries()) {
+        if (now - data.lastSeen > CONFIG.HEARTBEAT_TIMEOUT_MS) {
+            activeUsers.delete(key);
+            removed++;
+        }
+    }
+
+    for (const [ip, timestamps] of rateLimitStore.entries()) {
+        const filtered = timestamps.filter(t => now - t < CONFIG.RATE_LIMIT_WINDOW_MS);
+        if (filtered.length === 0) rateLimitStore.delete(ip);
+        else rateLimitStore.set(ip, filtered);
+    }
+
+    if (removed > 0) console.log(`[cleanup] ${removed} lejárt bejegyzés törölve`);
+}, CONFIG.CLEANUP_INTERVAL_MS);
+
+// --- HIBAKEZELÉS ---
+
+app.use((err, req, res, next) => {
+    console.error('[error]', err);
+    res.status(500).json({ error: 'Internal server error' });
+});
+
+// --- INDÍTÁS ---
+
+const server = app.listen(CONFIG.PORT, () => {
+    console.log(`Server running on port ${CONFIG.PORT}`);
+});
+
+process.on('SIGTERM', () => {
+    console.log('SIGTERM received, shutting down...');
+    server.close(() => process.exit(0));
+});
