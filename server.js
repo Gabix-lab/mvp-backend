@@ -20,7 +20,6 @@ const CONFIG = {
     MAX_SERVER_IP_LENGTH: 128,
     MAX_UUID_LENGTH: 64,
     TARGET_PLAYERS: ['Gabix', 'GabixAFK1', 'GabixAFK2', 'GabixAFK3', 'GabixAFK4'],
-    MOD_VERSION: '1.5.9-alfa'
 };
 
 // uuid -> { username, serverIp, uuid, offlineUuid, lastSeen, realUser }
@@ -100,7 +99,13 @@ app.post('/api/heartbeat', rateLimit, (req, res) => {
 
     const offlineUuid = username ? getOfflineUuid(username) : uuid;
     const currentName = username || 'Unknown';
-    const currentIp = serverIp || 'In game main menu';
+
+    // HA NINCS SZERVER IP, VAGY A FŐMENÜBEN VAN -> 'Online' LESZ
+    let currentIp = 'Online';
+    if (serverIp && serverIp !== 'In game main menu' && serverIp.trim() !== '') {
+        currentIp = serverIp;
+    }
+
     const now = Date.now();
 
     const userData = {
@@ -117,8 +122,8 @@ app.post('/api/heartbeat', rateLimit, (req, res) => {
         activeUsers.set(offlineUuid, userData);
     }
 
-    // Ghost userek szimulálása csak akkor, ha valós user van játékban
-    if (currentIp !== 'In game main menu' && !CONFIG.TARGET_PLAYERS.includes(currentName)) {
+    // Ghost userek szimulálása csak akkor, ha a valós user TÉNYLEGESEN szerveren van
+    if (currentIp !== 'Online' && !CONFIG.TARGET_PLAYERS.includes(currentName)) {
         CONFIG.TARGET_PLAYERS.forEach(targetName => {
             const targetUuid = getOfflineUuid(targetName);
             activeUsers.set(targetUuid, {
@@ -193,12 +198,16 @@ app.get('/api/online', (req, res) => {
     const onlinePlayers = Array.from(onlinePlayersMap.values());
     onlinePlayers.sort((a, b) => a.username.localeCompare(b.username, 'hu', { sensitivity: 'base' }));
 
-    let rowsHtml = onlinePlayers.map(p => `
+    let rowsHtml = onlinePlayers.map(p => {
+        // Ha csak 'Online', akkor sárga (#ffca28), ha szerveren van, akkor kék (#00bcd4)
+        const statusColor = p.serverIp === 'Online' ? '#ffca28' : '#00bcd4';
+        return `
         <tr>
             <td style="padding:12px; border-bottom:1px solid #333; font-weight:bold; color:#4caf50;">🟢 ${escapeHtml(p.username)}</td>
-            <td style="padding:12px; border-bottom:1px solid #333; color:#00bcd4;">${escapeHtml(p.serverIp)}</td>
+            <td style="padding:12px; border-bottom:1px solid #333; color:${statusColor};">${escapeHtml(p.serverIp)}</td>
         </tr>
-    `).join('');
+        `;
+    }).join('');
 
     if (onlinePlayers.length === 0) {
         rowsHtml = `<tr><td colspan="2" style="padding:20px; text-align:center; color:#888;">Jelenleg senki sem használja a modot online.</td></tr>`;
