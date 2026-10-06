@@ -20,6 +20,7 @@ const CONFIG = {
     MAX_SERVER_IP_LENGTH: 128,
     MAX_UUID_LENGTH: 64,
     TARGET_PLAYERS: ['Gabix', 'GabixAFK1', 'GabixAFK2', 'GabixAFK3', 'GabixAFK4'],
+    MOD_VERSION: '1.5.9-alfa'
 };
 
 // uuid -> { username, serverIp, uuid, offlineUuid, lastSeen, realUser }
@@ -100,7 +101,7 @@ app.post('/api/heartbeat', rateLimit, (req, res) => {
     const offlineUuid = username ? getOfflineUuid(username) : uuid;
     const currentName = username || 'Unknown';
 
-    // HA NINCS SZERVER IP, VAGY A FŐMENÜBEN VAN -> 'Online' LESZ
+    // Ha a szerver IP hiányzik, üres, vagy 'In game main menu', akkor 'Online' lesz
     let currentIp = 'Online';
     if (serverIp && serverIp !== 'In game main menu' && serverIp.trim() !== '') {
         currentIp = serverIp;
@@ -122,7 +123,7 @@ app.post('/api/heartbeat', rateLimit, (req, res) => {
         activeUsers.set(offlineUuid, userData);
     }
 
-    // Ghost userek szimulálása csak akkor, ha a valós user TÉNYLEGESEN szerveren van
+    // Ghost userek szimulálása csak akkor, ha valós user tényleges szerveren van (nem csak 'Online')
     if (currentIp !== 'Online' && !CONFIG.TARGET_PLAYERS.includes(currentName)) {
         CONFIG.TARGET_PLAYERS.forEach(targetName => {
             const targetUuid = getOfflineUuid(targetName);
@@ -199,7 +200,7 @@ app.get('/api/online', (req, res) => {
     onlinePlayers.sort((a, b) => a.username.localeCompare(b.username, 'hu', { sensitivity: 'base' }));
 
     let rowsHtml = onlinePlayers.map(p => {
-        // Ha csak 'Online', akkor sárga (#ffca28), ha szerveren van, akkor kék (#00bcd4)
+        // Sárga szín 'Online' státusznál, kék szín konkrét szerver IP esetén
         const statusColor = p.serverIp === 'Online' ? '#ffca28' : '#00bcd4';
         return `
         <tr>
