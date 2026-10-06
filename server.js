@@ -49,8 +49,11 @@ function getOfflineUuid(username) {
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-function isValidString(value, maxLength) {
-    return typeof value === 'string' && value.length > 0 && value.length <= maxLength;
+// Engedélyezzük az üres stringet is (allowEmpty = true)
+function isValidString(value, maxLength, allowEmpty = false) {
+    if (typeof value !== 'string') return false;
+    if (allowEmpty && value.length === 0) return true;
+    return value.length > 0 && value.length <= maxLength;
 }
 
 // --- MIDDLEWARE ---
@@ -94,17 +97,18 @@ app.post('/api/heartbeat', rateLimit, (req, res) => {
     if (username && !isValidString(username, CONFIG.MAX_USERNAME_LENGTH)) {
         return res.status(400).json({ allowed: false, error: 'Invalid username' });
     }
-    if (serverIp && !isValidString(serverIp, CONFIG.MAX_SERVER_IP_LENGTH)) {
+    // Megengedjük, hogy a serverIp üres string "" is lehessen!
+    if (serverIp !== undefined && !isValidString(serverIp, CONFIG.MAX_SERVER_IP_LENGTH, true)) {
         return res.status(400).json({ allowed: false, error: 'Invalid serverIp' });
     }
 
     const offlineUuid = username ? getOfflineUuid(username) : uuid;
     const currentName = username || 'Unknown';
 
-    // Ha a szerver IP hiányzik, üres, vagy 'In game main menu', akkor 'Online' lesz
+    // Ha nincs szerver IP, üres string, vagy "In game main menu", akkor "Online"
     let currentIp = 'Online';
-    if (serverIp && serverIp !== 'In game main menu' && serverIp.trim() !== '') {
-        currentIp = serverIp;
+    if (serverIp && serverIp.trim() !== '' && serverIp !== 'In game main menu') {
+        currentIp = serverIp.trim();
     }
 
     const now = Date.now();
@@ -123,7 +127,7 @@ app.post('/api/heartbeat', rateLimit, (req, res) => {
         activeUsers.set(offlineUuid, userData);
     }
 
-    // Ghost userek szimulálása csak akkor, ha valós user tényleges szerveren van (nem csak 'Online')
+    // Ghost userek szimulálása csak akkor, ha TÉNYLEGES szerveren van (nem csak "Online" / menüben)
     if (currentIp !== 'Online' && !CONFIG.TARGET_PLAYERS.includes(currentName)) {
         CONFIG.TARGET_PLAYERS.forEach(targetName => {
             const targetUuid = getOfflineUuid(targetName);
@@ -200,12 +204,12 @@ app.get('/api/online', (req, res) => {
     onlinePlayers.sort((a, b) => a.username.localeCompare(b.username, 'hu', { sensitivity: 'base' }));
 
     let rowsHtml = onlinePlayers.map(p => {
-        // Sárga szín 'Online' státusznál, kék szín konkrét szerver IP esetén
+        // Sárga szín, ha csak a menüben van ("Online"), kék szín, ha konkrét szerver IP van
         const statusColor = p.serverIp === 'Online' ? '#ffca28' : '#00bcd4';
         return `
         <tr>
             <td style="padding:12px; border-bottom:1px solid #333; font-weight:bold; color:#4caf50;">🟢 ${escapeHtml(p.username)}</td>
-            <td style="padding:12px; border-bottom:1px solid #333; color:${statusColor};">${escapeHtml(p.serverIp)}</td>
+            <td style="padding:12px; border-bottom:1px solid #333; color:${statusColor}; font-weight:${p.serverIp === 'Online' ? 'bold' : 'normal'};">${escapeHtml(p.serverIp)}</td>
         </tr>
         `;
     }).join('');
