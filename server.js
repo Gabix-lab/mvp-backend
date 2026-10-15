@@ -10,7 +10,6 @@ app.set('trust proxy', 1);
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 
-// --- KONFIGURÁCIÓ ---
 const CONFIG = {
     PORT: process.env.PORT || 3000,
     ADMIN_TOKEN: process.env.ADMIN_TOKEN || null,
@@ -28,8 +27,6 @@ const CONFIG = {
 
 const activeUsers = new Map();
 const rateLimitStore = new Map();
-
-// --- SEGÉDFÜGGVÉNYEK ---
 
 function escapeHtml(str) {
     if (!str) return '';
@@ -55,7 +52,6 @@ function isValidString(value, maxLength, allowEmpty = false) {
     return value.length > 0 && value.length <= maxLength;
 }
 
-// Jar hash egyszer kiszámolva induláskor
 let modJarHash = null;
 let modJarSize = 0;
 
@@ -73,8 +69,6 @@ function computeModJarHash() {
         console.error('[mod] hiba a jar hash számításakor:', err);
     }
 }
-
-// --- MIDDLEWARE ---
 
 function rateLimit(req, res, next) {
     const ip = req.ip || req.connection.remoteAddress || 'unknown';
@@ -103,8 +97,6 @@ function requireAdmin(req, res, next) {
     }
     next();
 }
-
-// --- API VÉGPONTOK ---
 
 app.post('/api/heartbeat', rateLimit, (req, res) => {
     const { uuid, username, serverIp } = req.body;
@@ -194,8 +186,6 @@ app.get('/api/version', (req, res) => {
     res.json({ version: CONFIG.MOD_VERSION });
 });
 
-// --- MOD JAR KISZOLGÁLÁS ---
-
 app.get('/mod/version', (req, res) => {
     if (!modJarHash) {
         return res.status(503).json({ error: 'Mod jar nem elérhető' });
@@ -207,7 +197,7 @@ app.get('/mod/version', (req, res) => {
     });
 });
 
-app.get('/mod/mvp.jar', (req, res) => {
+app.get('/mod/mvp', (req, res) => {
     if (!fs.existsSync(CONFIG.MOD_JAR_PATH)) {
         return res.status(404).json({ error: 'Mod jar nem található' });
     }
@@ -223,8 +213,6 @@ app.get('/mod/mvp.jar', (req, res) => {
 
     fs.createReadStream(CONFIG.MOD_JAR_PATH).pipe(res);
 });
-
-// --- WEBES DASHBOARD ---
 
 app.get('/api/online', (req, res) => {
     if (req.query.reset === 'true') {
@@ -303,8 +291,6 @@ app.get('/api/online', (req, res) => {
     res.send(html);
 });
 
-// --- IDŐZÍTETT TISZTÍTÁS ---
-
 setInterval(() => {
     const now = Date.now();
     let removed = 0;
@@ -325,14 +311,10 @@ setInterval(() => {
     if (removed > 0) console.log(`[cleanup] ${removed} lejárt bejegyzés törölve`);
 }, CONFIG.CLEANUP_INTERVAL_MS);
 
-// --- HIBAKEZELÉS ---
-
 app.use((err, req, res, next) => {
     console.error('[error]', err);
     res.status(500).json({ error: 'Internal server error' });
 });
-
-// --- INDÍTÁS ---
 
 computeModJarHash();
 
