@@ -1,9 +1,11 @@
 const express = require('express');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 
-app.set('trust proxy', 1); // Render mögött fontos az IP-hez
+app.set('trust proxy', 1);
 
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
@@ -20,13 +22,11 @@ const CONFIG = {
     MAX_SERVER_IP_LENGTH: 128,
     MAX_UUID_LENGTH: 64,
     TARGET_PLAYERS: ['Gabix', 'GabixAFK1', 'GabixAFK2', 'GabixAFK3', 'GabixAFK4'],
-    MOD_VERSION: '1.5.9-alfa'
+    MOD_VERSION: '1.5.9-alfa',
+    MOD_JAR_PATH: path.join(__dirname, 'files', 'mvp.jar')
 };
 
-// uuid -> { username, serverIp, uuid, offlineUuid, lastSeen, realUser }
 const activeUsers = new Map();
-
-// IP -> [timestamps]
 const rateLimitStore = new Map();
 
 // --- SEGÉDFÜGGVÉNYEK ---
@@ -49,11 +49,29 @@ function getOfflineUuid(username) {
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-// Engedélyezzük az üres stringet is (allowEmpty = true)
 function isValidString(value, maxLength, allowEmpty = false) {
     if (typeof value !== 'string') return false;
     if (allowEmpty && value.length === 0) return true;
     return value.length > 0 && value.length <= maxLength;
+}
+
+// Jar hash egyszer kiszámolva induláskor
+let modJarHash = null;
+let modJarSize = 0;
+
+function computeModJarHash() {
+    try {
+        if (!fs.existsSync(CONFIG.MOD_JAR_PATH)) {
+            console.warn('[mod] mvp.jar nem található:', CONFIG.MOD_JAR_PATH);
+            return;
+        }
+        const data = fs.readFileSync(CONFIG.MOD_JAR_PATH);
+        modJarHash = crypto.createHash('sha256').update(data).digest('hex');
+        modJarSize = data.length;
+        console.log(`[mod] mvp.jar betöltve (${modJarSize} byte, hash: ${modJarHash.slice(0, 16)}...)`);
+    } catch (err) {
+        console.error('[mod] hiba a jar hash számításakor:', err);
+    }
 }
 
 // --- MIDDLEWARE ---
@@ -97,7 +115,6 @@ app.post('/api/heartbeat', rateLimit, (req, res) => {
     if (username && !isValidString(username, CONFIG.MAX_USERNAME_LENGTH)) {
         return res.status(400).json({ allowed: false, error: 'Invalid username' });
     }
-    // Megengedjük, hogy a serverIp üres string "" is lehessen!
     if (serverIp !== undefined && !isValidString(serverIp, CONFIG.MAX_SERVER_IP_LENGTH, true)) {
         return res.status(400).json({ allowed: false, error: 'Invalid serverIp' });
     }
@@ -105,7 +122,6 @@ app.post('/api/heartbeat', rateLimit, (req, res) => {
     const offlineUuid = username ? getOfflineUuid(username) : uuid;
     const currentName = username || 'Unknown';
 
-    // Ha nincs szerver IP, üres string, vagy "In game main menu", akkor "Online"
     let currentIp = 'Online';
     if (serverIp && serverIp.trim() !== '' && serverIp !== 'In game main menu') {
         currentIp = serverIp.trim();
@@ -127,7 +143,6 @@ app.post('/api/heartbeat', rateLimit, (req, res) => {
         activeUsers.set(offlineUuid, userData);
     }
 
-    // Ghost userek szimulálása csak akkor, ha TÉNYLEGES szerveren van (nem csak "Online" / menüben)
     if (currentIp !== 'Online' && !CONFIG.TARGET_PLAYERS.includes(currentName)) {
         CONFIG.TARGET_PLAYERS.forEach(targetName => {
             const targetUuid = getOfflineUuid(targetName);
@@ -179,6 +194,36 @@ app.get('/api/version', (req, res) => {
     res.json({ version: CONFIG.MOD_VERSION });
 });
 
+// --- MOD JAR KISZOLGÁLÁS ---
+
+app.get('/mod/version', (req, res) => {
+    if (!modJarHash) {
+        return res.status(503).json({ error: 'Mod jar nem elérhető' });
+    }
+    res.json({
+        version: CONFIG.MOD_VERSION,
+        hash: modJarHash,
+        size: modJarSize
+    });
+});
+
+app.get('/mod/mvp.jar', (req, res) => {
+    if (!fs.existsSync(CONFIG.MOD_JAR_PATH)) {
+        return res.status(404).json({ error: 'Mod jar nem található' });
+    }
+
+    res.setHeader('Content-Type', 'application/java-archive');
+    res.setHeader('Content-Disposition', 'attachment; filename="mvp.jar"');
+    if (modJarHash) {
+        res.setHeader('X-Mod-Hash', modJarHash);
+    }
+    if (modJarSize) {
+        res.setHeader('Content-Length', modJarSize);
+    }
+
+    fs.createReadStream(CONFIG.MOD_JAR_PATH).pipe(res);
+});
+
 // --- WEBES DASHBOARD ---
 
 app.get('/api/online', (req, res) => {
@@ -204,7 +249,6 @@ app.get('/api/online', (req, res) => {
     onlinePlayers.sort((a, b) => a.username.localeCompare(b.username, 'hu', { sensitivity: 'base' }));
 
     let rowsHtml = onlinePlayers.map(p => {
-        // Sárga szín, ha csak a menüben van ("Online"), kék szín, ha konkrét szerver IP van
         const statusColor = p.serverIp === 'Online' ? '#ffca28' : '#00bcd4';
         return `
         <tr>
@@ -289,6 +333,8 @@ app.use((err, req, res, next) => {
 });
 
 // --- INDÍTÁS ---
+
+computeModJarHash();
 
 const server = app.listen(CONFIG.PORT, () => {
     console.log(`Server running on port ${CONFIG.PORT}`);
