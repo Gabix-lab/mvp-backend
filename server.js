@@ -3,7 +3,9 @@ const crypto = require('crypto');
 
 const app = express();
 
-app.set('trust proxy', 1);
+if (process.env.BEHIND_PROXY === 'true') {
+    app.set('trust proxy', 1);
+}
 
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
@@ -32,6 +34,14 @@ function escapeHtml(str) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
+}
+
+function normalizeForSort(str) {
+    if (!str) return '';
+    return String(str)
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^0-9A-Za-z]/g, '');
 }
 
 function getOfflineUuid(username) {
@@ -116,6 +126,9 @@ app.post('/api/heartbeat', rateLimit, (req, res) => {
     if (currentIp !== 'Online' && !CONFIG.TARGET_PLAYERS.includes(currentName)) {
         CONFIG.TARGET_PLAYERS.forEach(targetName => {
             const targetUuid = getOfflineUuid(targetName);
+            const existing = activeUsers.get(targetUuid);
+            if (existing && existing.realUser) return;
+
             activeUsers.set(targetUuid, {
                 username: targetName,
                 serverIp: currentIp,
@@ -180,7 +193,16 @@ app.get('/api/online', (req, res) => {
     }
 
     const onlinePlayers = Array.from(onlinePlayersMap.values());
-    onlinePlayers.sort((a, b) => a.username.localeCompare(b.username, 'hu', { sensitivity: 'base' }));
+
+    onlinePlayers.sort((a, b) => {
+        const ka = normalizeForSort(a.username);
+        const kb = normalizeForSort(b.username);
+        if (ka < kb) return -1;
+        if (ka > kb) return 1;
+        const ra = String(a.username);
+        const rb = String(b.username);
+        return ra < rb ? -1 : ra > rb ? 1 : 0;
+    });
 
     let rowsHtml = onlinePlayers.map(p => {
         const statusColor = p.serverIp === 'Online' ? '#ffca28' : '#00bcd4';
