@@ -1,7 +1,5 @@
 const express = require('express');
 const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
 
 const app = express();
 
@@ -20,9 +18,7 @@ const CONFIG = {
     MAX_USERNAME_LENGTH: 32,
     MAX_SERVER_IP_LENGTH: 128,
     MAX_UUID_LENGTH: 64,
-    TARGET_PLAYERS: ['Gabix', 'GabixAFK1', 'GabixAFK2', 'GabixAFK3', 'GabixAFK4'],
-    MOD_VERSION: '1.5.9-alfa',
-    MOD_JAR_PATH: path.join(__dirname, 'files', 'mvp.jar')
+    TARGET_PLAYERS: ['Gabix', 'GabixAFK1', 'GabixAFK2', 'GabixAFK3', 'GabixAFK4']
 };
 
 const activeUsers = new Map();
@@ -50,24 +46,6 @@ function isValidString(value, maxLength, allowEmpty = false) {
     if (typeof value !== 'string') return false;
     if (allowEmpty && value.length === 0) return true;
     return value.length > 0 && value.length <= maxLength;
-}
-
-let modJarHash = null;
-let modJarSize = 0;
-
-function computeModJarHash() {
-    try {
-        if (!fs.existsSync(CONFIG.MOD_JAR_PATH)) {
-            console.warn('[mod] mvp.jar nem található:', CONFIG.MOD_JAR_PATH);
-            return;
-        }
-        const data = fs.readFileSync(CONFIG.MOD_JAR_PATH);
-        modJarHash = crypto.createHash('sha256').update(data).digest('hex');
-        modJarSize = data.length;
-        console.log(`[mod] mvp.jar betöltve (${modJarSize} byte, hash: ${modJarHash.slice(0, 16)}...)`);
-    } catch (err) {
-        console.error('[mod] hiba a jar hash számításakor:', err);
-    }
 }
 
 function rateLimit(req, res, next) {
@@ -182,38 +160,6 @@ app.get('/api/users', rateLimit, (req, res) => {
     return res.json({ users: Array.from(activeList) });
 });
 
-app.get('/api/version', (req, res) => {
-    res.json({ version: CONFIG.MOD_VERSION });
-});
-
-app.get('/mod/version', (req, res) => {
-    if (!modJarHash) {
-        return res.status(503).json({ error: 'Mod jar nem elérhető' });
-    }
-    res.json({
-        version: CONFIG.MOD_VERSION,
-        hash: modJarHash,
-        size: modJarSize
-    });
-});
-
-app.get('/mod/mvp', (req, res) => {
-    if (!fs.existsSync(CONFIG.MOD_JAR_PATH)) {
-        return res.status(404).json({ error: 'Mod jar nem található' });
-    }
-
-    res.setHeader('Content-Type', 'application/java-archive');
-    res.setHeader('Content-Disposition', 'attachment; filename="mvp.jar"');
-    if (modJarHash) {
-        res.setHeader('X-Mod-Hash', modJarHash);
-    }
-    if (modJarSize) {
-        res.setHeader('Content-Length', modJarSize);
-    }
-
-    fs.createReadStream(CONFIG.MOD_JAR_PATH).pipe(res);
-});
-
 app.get('/api/online', (req, res) => {
     if (req.query.reset === 'true') {
         return requireAdmin(req, res, () => {
@@ -315,8 +261,6 @@ app.use((err, req, res, next) => {
     console.error('[error]', err);
     res.status(500).json({ error: 'Internal server error' });
 });
-
-computeModJarHash();
 
 const server = app.listen(CONFIG.PORT, () => {
     console.log(`Server running on port ${CONFIG.PORT}`);
